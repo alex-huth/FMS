@@ -1513,14 +1513,14 @@ end subroutine get_ocean_model_area_elements
 
 !> @brief Sets up exchange grid connectivity using grid specification file and
 !!      processor domain decomposition.
-subroutine setup_xmap(xmap, grid_ids, grid_domains, grid_file, atm_grid, lnd_ug_domain)
+subroutine setup_xmap(xmap, grid_ids, grid_domains, grid_file, atm_grid, lnd_ug_domain, input_dir)
   type (xmap_type),                        intent(inout) :: xmap
   character(len=3), dimension(:),            intent(in ) :: grid_ids
   type(Domain2d),   dimension(:),            intent(in ) :: grid_domains
   character(len=*),                          intent(in ) :: grid_file
   type(grid_box_type), optional,             intent(in ) :: atm_grid
   type(domainUG),      optional,             intent(in ) :: lnd_ug_domain
-
+  character(len=*),    optional,             intent(in ) :: input_dir
   integer :: g, p, i
   integer :: nxgrid_file, i1, i2, i3, tile1, tile2, j
   integer :: nxc, nyc, out_unit
@@ -1532,7 +1532,7 @@ subroutine setup_xmap(xmap, grid_ids, grid_domains, grid_file, atm_grid, lnd_ug_
   character(len=256)                           :: xgrid_file, xgrid_name, xgrid_dimname
   character(len=256)                           :: tile_file, mosaic_file
   character(len=256)                           :: mosaic1, mosaic2, contact
-  character(len=256)                           :: tile1_name, tile2_name
+  character(len=256)                           :: tile1_name, tile2_name, input_dir_name
   character(len=256),              allocatable :: tile1_list(:), tile2_list(:), xgrid_filelist(:)
   integer                                      :: npes, npes2
   integer,                         allocatable :: pelist(:)
@@ -1619,10 +1619,15 @@ subroutine setup_xmap(xmap, grid_ids, grid_domains, grid_file, atm_grid, lnd_ug_
      select case(xmap%version)
      case(VERSION1)
         grid%ntile = 1
-     case(VERSION2)
+      case(VERSION2)
+        if (present(input_dir)) then
+          input_dir_name=trim(input_dir)
+        else
+          input_dir_name='INPUT/'
+        endif
         call read_data(gridfileobj, lowercase(grid_ids(g))//'_mosaic_file', mosaic_file)
-        if(.not. open_file(mosaicfileobj,'INPUT/'//trim(mosaic_file), "read")) then
-           call error_mesg('xgrid_mod', 'Error when opening solo mosaic file INPUT/'//trim(mosaic_file), FATAL)
+        if(.not. open_file(mosaicfileobj,trim(input_dir_name)//trim(mosaic_file), "read")) then
+           call error_mesg('xgrid_mod', 'Error when opening solo mosaic file '//trim(input_dir_name)//trim(mosaic_file), FATAL)
         endif
         call get_dimension_size(mosaicfileobj, 'ntiles', grid%ntile)
      end select
@@ -1888,8 +1893,8 @@ subroutine setup_xmap(xmap, grid_ids, grid_domains, grid_file, atm_grid, lnd_ug_
            call read_data(gridfileobj, lowercase(grid_ids(1))//'_mosaic_file', mosaic1)
            call read_data(gridfileobj, lowercase(grid_ids(g))//'_mosaic_file', mosaic2)
 
-           mosaic1 = 'INPUT/'//trim(mosaic1)
-           mosaic2 = 'INPUT/'//trim(mosaic2)
+           mosaic1 = trim(input_dir_name)//trim(mosaic1)
+           mosaic2 = trim(input_dir_name)//trim(mosaic2)
 
            allocate(tile1_list(grid1%ntile), tile2_list(grid%ntile) )
            if(.not. open_file(fileobj,mosaic1, "read")) then
@@ -1912,7 +1917,7 @@ subroutine setup_xmap(xmap, grid_ids, grid_domains, grid_file, atm_grid, lnd_ug_
               endif
               ! loop through all the exchange grid file
               do i = 1, nxgrid_file
-                 xgrid_file = 'INPUT/'//trim(xgrid_filelist(i))
+                 xgrid_file = trim(input_dir_name)//trim(xgrid_filelist(i))
                  if(.not. open_file(fileobj,xgrid_file, "read")) then
                      call error_mesg('xgrid_mod(setup_xmap)', 'Error when opening xgrid file '// &
                                    & trim(xgrid_file), FATAL)
