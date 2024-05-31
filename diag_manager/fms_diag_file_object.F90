@@ -28,13 +28,14 @@ module fms_diag_file_object_mod
 use fms2_io_mod, only: FmsNetcdfFile_t, FmsNetcdfUnstructuredDomainFile_t, FmsNetcdfDomainFile_t, &
                        get_instance_filename, open_file, close_file, get_mosaic_tile_file, unlimited, &
                        register_axis, register_field, register_variable_attribute, write_data, &
-                       dimension_exists, register_global_attribute
+                       dimension_exists, register_global_attribute, flush_file
 use diag_data_mod, only: DIAG_NULL, NO_DOMAIN, max_axes, SUB_REGIONAL, get_base_time, DIAG_NOT_REGISTERED, &
                          TWO_D_DOMAIN, UG_DOMAIN, prepend_date, DIAG_DAYS, VERY_LARGE_FILE_FREQ, &
                          get_base_year, get_base_month, get_base_day, get_base_hour, get_base_minute, &
                          get_base_second, time_unit_list, time_average, time_rms, time_max, time_min, time_sum, &
                          time_diurnal, time_power, time_none, avg_name, no_units, pack_size_str, &
-                         middle_time, begin_time, end_time, MAX_STR_LEN, index_gridtype, latlon_gridtype, null_gridtype
+                         middle_time, begin_time, end_time, MAX_STR_LEN, index_gridtype, latlon_gridtype, &
+                         null_gridtype, flush_nc_files
 use time_manager_mod, only: time_type, operator(>), operator(/=), operator(==), get_date, get_calendar_type, &
                             VALID_CALENDAR_TYPES, operator(>=), date_to_string, &
                             OPERATOR(/), OPERATOR(+), operator(<)
@@ -192,6 +193,7 @@ type fmsDiagFileContainer_type
   procedure :: init_unlim_dim
   procedure :: update_current_new_file_freq_index
   procedure :: get_unlim_dimension_level
+  procedure :: flush_diag_file
   procedure :: get_next_output
   procedure :: get_next_next_output
   procedure :: close_diag_file
@@ -1391,11 +1393,12 @@ logical function is_time_to_close_file (this, time_step)
 end function
 
 !> \brief Determine if it is time to "write" to the file
-logical function is_time_to_write(this, time_step, output_buffers, do_not_write)
+logical function is_time_to_write(this, time_step, output_buffers, diag_fields, do_not_write)
   class(fmsDiagFileContainer_type), intent(inout), target   :: this              !< The file object
   TYPE(time_type),                  intent(in)              :: time_step         !< Current model step time
   type(fmsDiagOutputBuffer_type),   intent(in)              :: output_buffers(:) !< Array of output buffer.
                                                                                  !! This is needed for error messages!
+  type(fmsDiagField_type),          intent(in)              :: diag_fields(:)    !< Array of diag_fields objects
   logical,                          intent(out)             :: do_not_write      !< .True. only if this is not a new
                                                                                  !! time step and you are writting
                                                                                  !! at every time step
@@ -1409,7 +1412,7 @@ logical function is_time_to_write(this, time_step, output_buffers, do_not_write)
         !! If the diag file is being written at every time step
         if (time_step .ne. this%FMS_diag_file%next_output) then
           !! Only write and update the next_output if it is a new time
-          call this%FMS_diag_file%check_buffer_times(output_buffers)
+          call this%FMS_diag_file%check_buffer_times(output_buffers, diag_fields)
           this%FMS_diag_file%next_output = time_step
           this%FMS_diag_file%next_next_output = time_step
           is_time_to_write = .true.
@@ -1473,10 +1476,8 @@ subroutine write_time_data(this)
   diag_file => this%FMS_diag_file
   fms2io_fileobj => diag_file%fms2io_fileobj
 
-  !< If data has not been written for the current unlimited dimension
-  !! ignore this. The diag_file%unlim_dimension_level .ne. 1 is there to ensure
-  !! that at least one time level is written (this is needed for the combiner)
-  if (.not. diag_file%data_has_been_written .and. diag_file%unlim_dimension_level .ne. 1) return
+  !< If data has not been written for the current unlimited dimension leave the subroutine
+  if (.not. diag_file%data_has_been_written) return
 
   if (diag_file%get_time_ops()) then
     middle_time = (diag_file%last_output+diag_file%next_output)/2
@@ -1590,6 +1591,15 @@ result(res)
 
   res = this%FMS_diag_file%unlim_dimension_level
 end function
+
+!> \brief Flushes the netcdf file to disk if flush_nc_files is set to .True. in the namelist
+subroutine flush_diag_file(this)
+  class(fmsDiagFileContainer_type), intent(inout), target   :: this            !< The file object
+
+  if (flush_nc_files) then
+    call flush_file(this%FMS_diag_file%fms2io_fileobj)
+  endif
+end subroutine flush_diag_file
 
 !> \brief Get the next_output for the file object
 !! \return The next_output
@@ -1831,22 +1841,29 @@ end function get_number_of_buffers
 
 !> Check to ensure that send_data was called at the time step for every output buffer in the file
 !! This is only needed when you are output data at every time step
-subroutine check_buffer_times(this, output_buffers)
+subroutine check_buffer_times(this, output_buffers, diag_fields)
   class(fmsDiagFile_type),        intent(in)           :: this              !< file object
   type(fmsDiagOutputBuffer_type), intent(in), target   :: output_buffers(:) !< Array of output buffers
+  type(fmsDiagField_type),        intent(in)           :: diag_fields(:)    !< Array of diag_fields
 
-  integer :: i
-  type(time_type) :: current_buffer_time
-  character(len=:), allocatable :: field_name
+  integer                       :: i                   !< For do loop
+  type(time_type)               :: current_buffer_time !< The buffer time for the current buffer in the do loop
+  character(len=:), allocatable :: field_name          !< The field name (for error messages)
+  logical                       :: buffer_time_set     !< .True. if current_buffer_time has been set
+  type(fmsDiagOutputBuffer_type), pointer :: output_buffer_obj !< Pointer to the output buffer
 
+  buffer_time_set = .false.
   do i = 1, this%number_of_buffers
-    if (i .eq. 1) then
-      current_buffer_time = output_buffers(this%buffer_ids(i))%get_buffer_time()
-      field_name = output_buffers(this%buffer_ids(i))%get_buffer_name()
+    output_buffer_obj => output_buffers(this%buffer_ids(i))
+    if (diag_fields(output_buffer_obj%get_field_id())%is_static()) cycle
+    if (.not. buffer_time_set) then
+      current_buffer_time = output_buffer_obj%get_buffer_time()
+      field_name = output_buffer_obj%get_buffer_name()
+      buffer_time_set = .true.
     else
-      if (current_buffer_time .ne. output_buffers(this%buffer_ids(i))%get_buffer_time()) &
+      if (current_buffer_time .ne. output_buffer_obj%get_buffer_time()) &
         call mpp_error(FATAL, "Send data has not been called at the same time steps for the fields:"//&
-                              field_name//" and "//output_buffers(this%buffer_ids(i))%get_buffer_name()//&
+                              field_name//" and "//output_buffer_obj%get_buffer_name()//&
                               " in file:"//this%get_file_fname())
     endif
   enddo
