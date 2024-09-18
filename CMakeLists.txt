@@ -23,7 +23,7 @@ cmake_minimum_required(VERSION 3.12 FATAL_ERROR)
 
 # Define the CMake project
 project(FMS
-  VERSION 2024.02.0
+  VERSION 2024.03.0
   DESCRIPTION  "GFDL FMS Library"
   HOMEPAGE_URL "https://www.gfdl.noaa.gov/fms"
   LANGUAGES C Fortran)
@@ -61,6 +61,7 @@ option(SHARED_LIBS "Build shared/dynamic libraries"       OFF)
 # Options for compiler definitions
 option(INTERNAL_FILE_NML     "Enable compiler definition -DINTERNAL_FILE_NML"      ON)
 option(ENABLE_QUAD_PRECISION "Enable compiler definition -DENABLE_QUAD_PRECISION"  ON)
+option(PORTABLE_KINDS        "Enable compiler definition -DPORTABLE_KINDS"        OFF)
 option(GFS_PHYS              "Enable compiler definition -DGFS_PHYS"              OFF)
 option(LARGEFILE             "Enable compiler definition -Duse_LARGEFILE"         OFF)
 option(WITH_YAML             "Enable compiler definition -Duse_yaml"              OFF)
@@ -267,6 +268,10 @@ if(ENABLE_QUAD_PRECISION)
   list(APPEND fms_defs ENABLE_QUAD_PRECISION)
 endif()
 
+if(PORTABLE_KINDS)
+  list(APPEND fms_defs PORTABLE_KINDS)
+endif()
+
 if(LARGEFILE)
   list(APPEND fms_defs use_LARGEFILE)
 endif()
@@ -424,13 +429,13 @@ endforeach()
 install(
   TARGETS ${LIB_TARGETS}
   EXPORT FMSExports
-  RUNTIME DESTINATION bin
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib)
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 ### Package config
 include(CMakePackageConfigHelpers)
-set(CONFIG_INSTALL_DESTINATION lib/cmake/fms)
+set(CONFIG_INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/fms)
 
 export(EXPORT FMSExports
   NAMESPACE FMS::
